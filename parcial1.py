@@ -1,41 +1,71 @@
+import sqlite3
+import redis
+
 class InventoryApp:
     def __init__(self):
-        self.inventory = {}
+        self.db_connection = sqlite3.connect('inventory.db')
+        self.db_cursor = self.db_connection.cursor()
 
-    def register_item(self, item_id, name, quantity, price):
-        if item_id in self.inventory:
-            print("Error: El artículo ya está registrado.")
-        else:
-            self.inventory[item_id] = {'name': name, 'quantity': quantity, 'price': price}
-            print("Artículo registrado con éxito.")
+        self.redis_client = redis.Redis(host='localhost', port=6379, db=0)
+
+        self.db_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                quantity INTEGER,
+                price REAL
+            )
+        ''')
+        self.db_connection.commit()
+
+    def register_item(self, name, quantity, price):
+        self.db_cursor.execute('''
+            INSERT INTO items (name, quantity, price)
+            VALUES (?, ?, ?)
+        ''', (name, quantity, price))
+        self.db_connection.commit()
+
+        item_id = self.db_cursor.lastrowid
+        self.redis_client.hmset(item_id, {'name': name, 'quantity': quantity, 'price': price})
+        print("Artículo registrado con éxito.")
 
     def search_item(self, item_id):
-        if item_id in self.inventory:
-            item = self.inventory[item_id]
-            print(f"ID: {item_id}, Nombre: {item['name']}, Cantidad: {item['quantity']}, Precio: {item['price']}")
+        item = self.redis_client.hgetall(item_id)
+        if item:
+            print(f"ID: {item_id}, Nombre: {item[b'name'].decode()}, Cantidad: {item[b'quantity'].decode()}, Precio: {item[b'price'].decode()}")
         else:
             print("Artículo no encontrado.")
 
     def edit_item(self, item_id, new_name, new_quantity, new_price):
-        if item_id in self.inventory:
-            self.inventory[item_id]['name'] = new_name
-            self.inventory[item_id]['quantity'] = new_quantity
-            self.inventory[item_id]['price'] = new_price
-            print("Artículo editado con éxito.")
-        else:
-            print("Artículo no encontrado.")
+        self.db_cursor.execute('''
+            UPDATE items
+            SET name=?, quantity=?, price=?
+            WHERE id=?
+        ''', (new_name, new_quantity, new_price, item_id))
+        self.db_connection.commit()
+
+        self.redis_client.hmset(item_id, {'name': new_name, 'quantity': new_quantity, 'price': new_price})
+        print("Artículo editado con éxito.")
 
     def delete_item(self, item_id):
-        if item_id in self.inventory:
-            del self.inventory[item_id]
-            print("Artículo eliminado con éxito.")
-        else:
-            print("Artículo no encontrado.")
+        self.db_cursor.execute('''
+            DELETE FROM items
+            WHERE id=?
+        ''', (item_id,))
+        self.db_connection.commit()
+
+        self.redis_client.delete(item_id)
+        print("Artículo eliminado con éxito.")
 
     def show_inventory(self):
-        for item_id, item in self.inventory.items():
-            print(f"ID: {item_id}, Nombre: {item['name']}, Cantidad: {item['quantity']}, Precio: {item['price']}")
+        self.db_cursor.execute('SELECT * FROM items')
+        items = self.db_cursor.fetchall()
 
+        for item in items:
+            print(f"ID: {item[0]}, Nombre: {item[1]}, Cantidad: {item[2]}, Precio: {item[3]}")
+
+    def close_connections(self):
+        self.db_connection.close()
 
 def main():
     app = InventoryApp()
@@ -56,37 +86,36 @@ def main():
             continue
 
         if option == 1:
-            item_id = input("ID del artículo: ")
             name = input("Nombre del artículo: ")
             quantity = int(input("Cantidad del artículo: "))
             price = float(input("Precio del artículo: "))
-            app.register_item(item_id, name, quantity, price)
+            app.register_item(name, quantity, price)
 
         elif option == 2:
             item_id = input("ID del artículo a buscar: ")
             app.search_item(item_id)
 
         elif option == 3:
-            item_id = input("ID del artículo a editar: ")
+            item_id = int(input("ID del artículo a editar: "))
             new_name = input("Nuevo nombre del artículo: ")
             new_quantity = int(input("Nueva cantidad del artículo: "))
             new_price = float(input("Nuevo precio del artículo: "))
             app.edit_item(item_id, new_name, new_quantity, new_price)
 
         elif option == 4:
-            item_id = input("ID del artículo a eliminar: ")
+            item_id = int(input("ID del artículo a eliminar: "))
             app.delete_item(item_id)
 
         elif option == 5:
             app.show_inventory()
 
         elif option == 6:
+            app.close_connections()
             print("Gracias por usar el sistema de inventario.")
             break
 
         else:
             print("Opción inválida, por favor selecciona una opción válida.")
-
 
 if __name__ == "__main__":
     main()
